@@ -1,0 +1,413 @@
+<?xml version="1.0" encoding="utf-8"?>
+<nugget name="CI_LINES_OF_CODE">
+ <CLAS CLSNAME="ZZ_CL_CI_LINES_OF_CODE" VERSION="1" LANGU="E" DESCRIPT="CodeInspector - Test Scan - Lines of Code" CATEGORY="00" EXPOSURE="2" STATE="1" RELEASE="0" CLSCCINCL="X" FIXPT="X" UNICODE="X" CLSBCCAT="00" WITH_UNIT_TESTS="X" DURATION_TYPE="0 " RISK_LEVEL="0 " REFCLSNAME="CL_CI_TEST_SCAN">
+  <localImplementation>&quot;! object checker interface
+INTERFACE lif_object_checker.
+  METHODS check IMPORTING io_ci_check TYPE REF TO zz_cl_ci_lines_of_code.
+ENDINTERFACE.
+
+&quot;! abstract object checker
+CLASS lcl_object_checker DEFINITION ABSTRACT.
+  PUBLIC SECTION.
+    INTERFACES lif_object_checker.
+
+  PROTECTED SECTION.
+    &quot;! CI check instance
+    DATA mo_ci_check TYPE REF TO zz_cl_ci_lines_of_code.
+
+    &quot;! lines of code calculation for a block
+    &quot;! @parameter if_count_start_end_statement | count start/end statement of code block
+    &quot;! @parameter if_count_empty_lines | count empty lines of code block
+    &quot;! @parameter if_count_comments | count comments of code block
+    &quot;! @parameter is_statement_begin | statement begin
+    &quot;! @parameter iv_statement_end_str | statement end string
+    &quot;! @parameter rv_length | length
+    METHODS lines_of_code
+      IMPORTING if_count_start_end_statement TYPE boole_d DEFAULT abap_false
+                if_count_empty_lines         TYPE boole_d DEFAULT abap_false
+                if_count_comments            TYPE boole_d DEFAULT abap_false
+                is_statement_begin           TYPE sstmnt
+                iv_statement_end_str         TYPE string
+      RETURNING VALUE(rv_length)             TYPE i.
+
+  PRIVATE SECTION.
+
+    &quot;! token type - comment
+    CONSTANTS mc_token_type_comment TYPE token_type VALUE &apos;C&apos;.
+
+ENDCLASS.
+
+CLASS lcl_object_checker IMPLEMENTATION.
+
+  METHOD lif_object_checker~check.
+    mo_ci_check = io_ci_check.
+  ENDMETHOD.
+
+  METHOD lines_of_code.
+    DATA(lv_last_processed_token_row) = 0.
+    DATA(lv_comment_lines) = 0.
+    DATA(lv_empty_lines) = 0.
+
+    rv_length = 0.
+
+    DATA(lv_token_index) = is_statement_begin-from + 1.
+
+    DATA(lo_scanner) = mo_ci_check-&gt;get_scanner( ).
+
+    DO.
+      TRY.
+          DATA(ls_token) = lo_scanner-&gt;tokens[ lv_token_index ].
+        CATCH cx_sy_itab_line_not_found.
+          EXIT.
+      ENDTRY.
+
+      IF ls_token-row &lt; lv_last_processed_token_row.
+        lv_token_index = lv_token_index + 1.
+        CONTINUE. &quot;skip enhancements in this version
+      ENDIF.
+
+      lv_last_processed_token_row = ls_token-row.
+
+      TRY.
+          DATA(ls_token_wa_prev) = lo_scanner-&gt;tokens[ lv_token_index - 1 ].
+        CATCH cx_sy_itab_line_not_found.
+          CLEAR ls_token_wa_prev.
+      ENDTRY.
+
+      IF if_count_comments = abap_false AND ls_token-type = mc_token_type_comment.
+        IF ls_token_wa_prev IS INITIAL
+        OR ls_token-row &gt; ls_token_wa_prev-row.
+          lv_comment_lines = lv_comment_lines + 1.
+        ENDIF.
+      ENDIF.
+
+      IF if_count_empty_lines = abap_false.
+        IF  ls_token-row &gt; 1
+        AND ( ( ls_token-row - ls_token_wa_prev-row ) &gt;= 2 ).
+          lv_empty_lines = lv_empty_lines + ( ls_token-row - ls_token_wa_prev-row - 1 ).
+        ENDIF.
+      ENDIF.
+
+      IF ls_token-str = iv_statement_end_str.
+        TRY.
+            rv_length = ls_token-row - lo_scanner-&gt;tokens[ is_statement_begin-from ]-row + 1.
+          CATCH cx_sy_itab_line_not_found.
+            rv_length = 0.
+        ENDTRY.
+        EXIT.
+      ENDIF.
+
+      lv_token_index = lv_token_index + 1.
+    ENDDO.
+
+    IF if_count_start_end_statement = abap_false.
+      rv_length = rv_length - 2.
+    ENDIF.
+
+    IF if_count_empty_lines = abap_false.
+      rv_length = rv_length - lv_empty_lines.
+    ENDIF.
+
+    IF if_count_comments = abap_false.
+      rv_length = rv_length - lv_comment_lines.
+    ENDIF.
+
+    IF rv_length &lt; 0.
+      rv_length = 0.
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+
+&quot;! method object checker
+CLASS lcl_object_checker_method DEFINITION INHERITING FROM lcl_object_checker.
+  PUBLIC SECTION.
+    METHODS lif_object_checker~check REDEFINITION.
+ENDCLASS.
+
+CLASS lcl_object_checker_method IMPLEMENTATION.
+
+  METHOD lif_object_checker~check.
+    super-&gt;lif_object_checker~check( io_ci_check = io_ci_check ).
+
+    IF mo_ci_check-&gt;get_att_meth_loc( ) &lt;= 0.
+      RETURN.
+    ENDIF.
+
+    DATA(lv_length) = lines_of_code( if_count_start_end_statement = mo_ci_check-&gt;get_att_meth_cnt_se( )
+                                     if_count_empty_lines = mo_ci_check-&gt;get_att_meth_cnt_el( )
+                                     if_count_comments = mo_ci_check-&gt;get_att_meth_cnt_co( )
+                                     is_statement_begin = mo_ci_check-&gt;get_current_statement( )
+                                     iv_statement_end_str = &apos;ENDMETHOD&apos; ).
+
+    IF lv_length &gt; mo_ci_check-&gt;get_att_meth_loc( ).
+      mo_ci_check-&gt;raise_msg_evt( iv_kind   = mo_ci_check-&gt;get_att_meth_msg_lvl( )
+                                  iv_param1 = CONV string( lv_length )
+                                  iv_param2 = CONV string( mo_ci_check-&gt;get_att_meth_loc( ) ) ).
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.
+
+&quot;! function object checker
+CLASS lcl_object_checker_function DEFINITION INHERITING FROM lcl_object_checker.
+  PUBLIC SECTION.
+    METHODS lif_object_checker~check REDEFINITION.
+ENDCLASS.
+
+CLASS lcl_object_checker_function IMPLEMENTATION.
+
+  METHOD lif_object_checker~check.
+    super-&gt;lif_object_checker~check( io_ci_check = io_ci_check ).
+
+    IF mo_ci_check-&gt;get_att_func_loc( ) &lt;= 0.
+      RETURN.
+    ENDIF.
+
+    DATA(lv_length) = lines_of_code( if_count_start_end_statement = mo_ci_check-&gt;get_att_func_cnt_se( )
+                                     if_count_empty_lines = mo_ci_check-&gt;get_att_func_cnt_el( )
+                                     if_count_comments = mo_ci_check-&gt;get_att_func_cnt_co( )
+                                     is_statement_begin = mo_ci_check-&gt;get_current_statement( )
+                                     iv_statement_end_str = &apos;ENDFUNCTION&apos; ).
+
+    IF lv_length &gt; mo_ci_check-&gt;get_att_func_loc( ).
+      mo_ci_check-&gt;raise_msg_evt( iv_kind   = mo_ci_check-&gt;get_att_func_msg_lvl( )
+                                  iv_param1 = CONV string( lv_length )
+                                  iv_param2 = CONV string( mo_ci_check-&gt;get_att_func_loc( ) ) ).
+    ENDIF.
+  ENDMETHOD.
+
+ENDCLASS.</localImplementation>
+  <localTypes>*&quot;* use this source file for any type of declarations (class
+*&quot;* definitions, interfaces or type declarations) you need for
+*&quot;* components in the private section</localTypes>
+  <localMacros>*&quot;* use this source file for any macro definitions you need
+*&quot;* in the implementation part of the class</localMacros>
+  <localTestClasses>*&quot;* use this source file for your ABAP unit test classes</localTestClasses>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MC_ERRC_NO_OF_LINES" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="2 " ATTDECLTYP="2" ATTVALUE="&apos;LoC&apos;" ATTEXPVIRT="0" TYPTYPE="1" TYPE="SCI_ERRC" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MC_MY_CLASSNAME" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="1 " ATTDECLTYP="2" ATTVALUE="&apos;ZZ_CL_CI_LINES_OF_CODE&apos;" ATTEXPVIRT="0" TYPTYPE="1" TYPE="SEOCLSNAME" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_FUNC_CNT_CO" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="12 " ATTDECLTYP="0" ATTVALUE="ABAP_FALSE" ATTEXPVIRT="0" TYPTYPE="1" TYPE="BOOLE_D" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_FUNC_CNT_EL" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="11 " ATTDECLTYP="0" ATTVALUE="ABAP_FALSE" ATTEXPVIRT="0" TYPTYPE="1" TYPE="BOOLE_D" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_FUNC_CNT_SE" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="10 " ATTDECLTYP="0" ATTVALUE="ABAP_FALSE" ATTEXPVIRT="0" TYPTYPE="1" TYPE="BOOLE_D" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_FUNC_LOC" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="8 " ATTDECLTYP="0" ATTEXPVIRT="0" TYPTYPE="1" TYPE="INT2" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_FUNC_MSG_LVL" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="9 " ATTDECLTYP="0" ATTVALUE="C_WARNING" ATTEXPVIRT="0" TYPTYPE="1" TYPE="CHAR1" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_METH_CNT_CO" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="7 " ATTDECLTYP="0" ATTVALUE="ABAP_FALSE" ATTEXPVIRT="0" TYPTYPE="1" TYPE="BOOLE_D" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_METH_CNT_EL" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="6 " ATTDECLTYP="0" ATTVALUE="ABAP_FALSE" ATTEXPVIRT="0" TYPTYPE="1" TYPE="BOOLE_D" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_METH_CNT_SE" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="5 " ATTDECLTYP="0" ATTVALUE="ABAP_FALSE" ATTEXPVIRT="0" TYPTYPE="1" TYPE="BOOLE_D" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_METH_LOC" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="3 " ATTDECLTYP="0" ATTEXPVIRT="0" TYPTYPE="1" TYPE="INT2" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <attribute CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="MV_ATT_METH_MSG_LVL" VERSION="1" LANGU="E" EXPOSURE="0" STATE="1" EDITORDER="4 " ATTDECLTYP="0" ATTVALUE="C_WARNING" ATTEXPVIRT="0" TYPTYPE="1" TYPE="CHAR1" SRCROW1="0 " SRCCOLUMN1="0 " SRCROW2="0 " SRCCOLUMN2="0 " TYPESRC_LENG="0 "/>
+  <inheritance CLSNAME="ZZ_CL_CI_LINES_OF_CODE" REFCLSNAME="CL_CI_TEST_SCAN" VERSION="1" STATE="1">
+   <redefinition CLSNAME="ZZ_CL_CI_LINES_OF_CODE" REFCLSNAME="CL_CI_TEST_SCAN" VERSION="1" MTDNAME="GET_ATTRIBUTES" EXPOSURE="2"/>
+   <redefinition CLSNAME="ZZ_CL_CI_LINES_OF_CODE" REFCLSNAME="CL_CI_TEST_SCAN" VERSION="1" MTDNAME="GET_MESSAGE_TEXT" EXPOSURE="2"/>
+   <redefinition CLSNAME="ZZ_CL_CI_LINES_OF_CODE" REFCLSNAME="CL_CI_TEST_SCAN" VERSION="1" MTDNAME="IF_CI_TEST~QUERY_ATTRIBUTES" EXPOSURE="2"/>
+   <redefinition CLSNAME="ZZ_CL_CI_LINES_OF_CODE" REFCLSNAME="CL_CI_TEST_SCAN" VERSION="1" MTDNAME="PUT_ATTRIBUTES" EXPOSURE="2"/>
+   <redefinition CLSNAME="ZZ_CL_CI_LINES_OF_CODE" REFCLSNAME="CL_CI_TEST_SCAN" VERSION="1" MTDNAME="RUN" EXPOSURE="2"/>
+  </inheritance>
+  <interfaceMethod CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CPDNAME="IF_CI_TEST~QUERY_ATTRIBUTES">
+   <source>METHOD if_ci_test~query_attributes.
+    DATA(lt_attributes) = VALUE sci_atttab(
+                                            ( ref = REF #( sy-index ) text = |Method Lines of Code| kind = &apos;G&apos; )
+                                            ( ref = REF #( mv_att_meth_loc ) text = |Message if more than ...| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_meth_msg_lvl ) text = |Message Level| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_meth_cnt_se ) text = |Count start/end statement| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_meth_cnt_el ) text = |Count empty lines| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_meth_cnt_co ) text = |Count comments| kind = &apos;T&apos; )
+
+                                            ( ref = REF #( sy-index ) text = |Function Lines of Code| kind = &apos;G&apos; )
+                                            ( ref = REF #( mv_att_func_loc ) text = |Message if more than ...| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_func_msg_lvl ) text = |Message Level| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_func_cnt_se ) text = |Count start/end statement| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_func_cnt_el ) text = |Count empty lines| kind = &apos;T&apos; )
+                                            ( ref = REF #( mv_att_func_cnt_co ) text = |Count comments| kind = &apos;T&apos; )
+                                          ).
+
+    cl_ci_query_attributes=&gt;generic( p_name       = mc_my_classname
+                                     p_title      = |Lines of Code|
+                                     p_attributes = lt_attributes
+                                     p_display    = p_display ).
+
+    attributes_ok = abap_true.
+  ENDMETHOD.</source>
+  </interfaceMethod>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="CONSTRUCTOR" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="1 " DISPID="0 " MTDTYPE="2" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <source>METHOD constructor .
+    super-&gt;constructor( ).
+
+    description = |Lines of Code|.
+    category    = |CL_CI_CATEGORY_STATISTICS|.
+    version     = |001|.
+    position    = |999|.
+    has_attributes = abap_true.
+  ENDMETHOD.                    &quot;CONSTRUCTOR</source>
+  </method>
+  <method CLSNAME="CL_CI_TEST_SCAN" CMPNAME="GET_ATTRIBUTES" VERSION="0" EXPOSURE="0" STATE="0" EDITORDER="0 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <source>METHOD get_attributes.
+    EXPORT
+      meth_loc = mv_att_meth_loc
+      meth_msg_lvl = mv_att_meth_msg_lvl
+      meth_cnt_se = mv_att_meth_cnt_se
+      meth_cnt_el = mv_att_meth_cnt_el
+      meth_cnt_co = mv_att_meth_cnt_co
+      func_loc = mv_att_func_loc
+      func_msg_lvl = mv_att_func_msg_lvl
+      func_cnt_se = mv_att_func_cnt_se
+      func_cnt_el = mv_att_func_cnt_el
+      func_cnt_co = mv_att_func_cnt_co
+      TO DATA BUFFER p_attributes.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_CNT_CO" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="13 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_CNT_CO" SCONAME="RV_ATT_FUNC_CNT_CO" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="BOOLE_D"/>
+   <source>METHOD get_att_func_cnt_co.
+    rv_att_func_cnt_co = mv_att_func_cnt_co.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_CNT_EL" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="12 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_CNT_EL" SCONAME="RV_ATT_FUNC_CNT_EL" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="BOOLE_D"/>
+   <source>METHOD get_att_func_cnt_el.
+    rv_att_func_cnt_el = mv_att_func_cnt_el.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_CNT_SE" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="11 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_CNT_SE" SCONAME="RV_ATT_FUNC_CNT_SE" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="BOOLE_D"/>
+   <source>METHOD get_att_func_cnt_se.
+    rv_att_func_cnt_se = mv_att_func_cnt_se.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_LOC" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="9 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_LOC" SCONAME="RV_ATT_FUNC_LOC" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="INT2"/>
+   <source>METHOD get_att_func_loc.
+    rv_att_func_loc = mv_att_func_loc.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_MSG_LVL" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="10 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_FUNC_MSG_LVL" SCONAME="RV_ATT_FUNC_MSG_LVL" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="CHAR1"/>
+   <source>METHOD get_att_func_msg_lvl.
+    rv_att_func_msg_lvl = mv_att_func_msg_lvl.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_CNT_CO" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="8 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_CNT_CO" SCONAME="RV_ATT_METH_CNT_CO" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="BOOLE_D"/>
+   <source>METHOD get_att_meth_cnt_co.
+    rv_att_meth_cnt_co = mv_att_meth_cnt_co.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_CNT_EL" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="7 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_CNT_EL" SCONAME="RV_ATT_METH_CNT_EL" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="BOOLE_D"/>
+   <source>METHOD get_att_meth_cnt_el.
+    rv_att_meth_cnt_el = mv_att_meth_cnt_el.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_CNT_SE" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="6 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_CNT_SE" SCONAME="RV_ATT_METH_CNT_SE" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="BOOLE_D"/>
+   <source>METHOD get_att_meth_cnt_se.
+    rv_att_meth_cnt_se = mv_att_meth_cnt_se.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_LOC" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="4 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_LOC" SCONAME="RV_ATT_METH_LOC" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="INT2"/>
+   <source>METHOD get_att_meth_loc.
+    rv_att_meth_loc = mv_att_meth_loc.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_MSG_LVL" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="5 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_ATT_METH_MSG_LVL" SCONAME="RV_ATT_METH_MSG_LVL" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="CHAR1"/>
+   <source>METHOD get_att_meth_msg_lvl.
+    rv_att_meth_msg_lvl = mv_att_meth_msg_lvl.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_CURRENT_STATEMENT" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="3 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_CURRENT_STATEMENT" SCONAME="RS_STATEMENT" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="1" TYPE="SSTMNT"/>
+   <source>METHOD get_current_statement.
+    rs_statement = statement_wa.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="CL_CI_TEST_SCAN" CMPNAME="GET_MESSAGE_TEXT" VERSION="0" EXPOSURE="0" STATE="0" EDITORDER="0 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <source>METHOD get_message_text.
+    CASE p_code.
+      WHEN mc_errc_no_of_lines.
+        p_text = |Number of Lines of Code (&amp;1) exceeds limit &amp;2.|.
+    ENDCASE.
+  ENDMETHOD.                    &quot;GET_MESSAGE_TEXT</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_SCANNER" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="2 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="GET_SCANNER" SCONAME="RO_SCANNER" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="3" PARPASSTYP="0" TYPTYPE="3" TYPE="CL_CI_SCAN"/>
+   <source>METHOD get_scanner.
+    ro_scanner = ref_scan.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="CL_CI_TEST_SCAN" CMPNAME="PUT_ATTRIBUTES" VERSION="0" EXPOSURE="0" STATE="0" EDITORDER="0 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <source>METHOD put_attributes.
+    IMPORT
+      meth_loc = mv_att_meth_loc
+      meth_msg_lvl = mv_att_meth_msg_lvl
+      meth_cnt_se = mv_att_meth_cnt_se
+      meth_cnt_el = mv_att_meth_cnt_el
+      meth_cnt_co = mv_att_meth_cnt_co
+      func_loc = mv_att_func_loc
+      func_msg_lvl = mv_att_func_msg_lvl
+      func_cnt_se = mv_att_func_cnt_se
+      func_cnt_el = mv_att_func_cnt_el
+      func_cnt_co = mv_att_func_cnt_co
+      FROM DATA BUFFER p_attributes.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="RAISE_MSG_EVT" VERSION="1" LANGU="E" EXPOSURE="2" STATE="1" EDITORDER="14 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="RAISE_MSG_EVT" SCONAME="IV_KIND" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="1 " DISPID="0 " PARDECLTYP="0" PARPASSTYP="1" TYPTYPE="1" TYPE="CHAR1"/>
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="RAISE_MSG_EVT" SCONAME="IV_PARAM1" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="2 " DISPID="0 " PARDECLTYP="0" PARPASSTYP="1" TYPTYPE="1" TYPE="STRING"/>
+   <parameter CLSNAME="ZZ_CL_CI_LINES_OF_CODE" CMPNAME="RAISE_MSG_EVT" SCONAME="IV_PARAM2" VERSION="1" LANGU="E" CMPTYPE="1" MTDTYPE="0" EDITORDER="3 " DISPID="0 " PARDECLTYP="0" PARPASSTYP="1" TYPTYPE="1" TYPE="STRING"/>
+   <source>METHOD raise_msg_evt.
+    DATA(lv_kind) = iv_kind.
+
+    IF lv_kind &lt;&gt; c_error
+    AND lv_kind &lt;&gt; c_warning
+    AND lv_kind &lt;&gt; c_note.
+      lv_kind = c_error.
+    ENDIF.
+
+    RAISE EVENT message EXPORTING
+        p_sub_obj_type = c_type_include
+        p_sub_obj_name = get_include( )
+        p_line         = 1
+        p_column       = 1
+        p_kind         = lv_kind
+        p_test         = mc_my_classname
+        p_code         = mc_errc_no_of_lines
+        p_param_1      = iv_param1
+        p_param_2      = iv_param2.
+  ENDMETHOD.</source>
+  </method>
+  <method CLSNAME="CL_CI_TEST_SCAN" CMPNAME="RUN" VERSION="0" EXPOSURE="0" STATE="0" EDITORDER="0 " DISPID="0 " MTDTYPE="0" MTDDECLTYP="0" BCMTDCAT="00" BCMTDSYN="0">
+   <source>METHOD run.
+    DATA lo_object_checker TYPE REF TO lif_object_checker.
+
+    IF ref_scan IS INITIAL.
+      IF get( ) = abap_false.
+        RETURN.
+      ENDIF.
+    ENDIF.
+
+    DATA(lv_statement_index) = 1.
+
+    DO.
+      TRY.
+          statement_wa = ref_scan-&gt;statements[ lv_statement_index ].
+        CATCH cx_sy_itab_line_not_found.
+          EXIT.
+      ENDTRY.
+
+      FREE lo_object_checker.
+      lo_object_checker = SWITCH #( keyword( ) WHEN &apos;METHOD&apos; THEN NEW lcl_object_checker_method( )
+                                               WHEN &apos;FUNCTION&apos; THEN NEW lcl_object_checker_function( ) ).
+
+      IF lo_object_checker IS BOUND.
+        lo_object_checker-&gt;check( io_ci_check = me  ).
+      ENDIF.
+
+      lv_statement_index = lv_statement_index + 1.
+    ENDDO.
+
+  ENDMETHOD.</source>
+  </method>
+ </CLAS>
+</nugget>
